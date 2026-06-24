@@ -2070,12 +2070,33 @@ window._idbGetAll  = idbGetAll;
   async function loadAllFromFirestore() {
     try {
       const snap = await getDocs(collection(fsDb, "salonData"));
+      const isFromCache = snap.metadata?.fromCache ?? false;
+
       snap.forEach(d => {
-        _cache[d.id]       = d.data().value;
-        _remoteCache[d.id] = d.data().value;
-        try { localStorage.setItem(d.id, JSON.stringify(d.data().value)); } catch {}
+        const remoteVal = d.data().value;
+        const localRaw  = localStorage.getItem(d.id);
+
+        // لو Firestore فاضي (null أو array فاضي) والـ localStorage فيه بيانات — إبقَ على المحلي
+        const remoteEmpty = remoteVal === null || remoteVal === undefined ||
+          (Array.isArray(remoteVal) && remoteVal.length === 0);
+        const localHasData = localRaw && localRaw !== 'null' && localRaw !== '[]';
+
+        if (remoteEmpty && localHasData) {
+          // ارفع البيانات المحلية لـ Firestore بدل ما تمسحها
+          try {
+            const localParsed = JSON.parse(localRaw);
+            setDoc(doc(fsDb, "salonData", d.id), { value: localParsed, updatedAt: Date.now() }).catch(() => {});
+            _cache[d.id]       = localParsed;
+            _remoteCache[d.id] = localParsed;
+          } catch {}
+        } else {
+          _cache[d.id]       = remoteVal;
+          _remoteCache[d.id] = remoteVal;
+          try { localStorage.setItem(d.id, JSON.stringify(remoteVal)); } catch {}
+        }
       });
-      // حفظ نسخة كاملة في IndexedDB كـ backup شامل
+
+      // حفظ نسخة كاملة في IndexedDB
       try {
         if (window._idbSetMany && snap.size > 0) {
           const entries = [];
@@ -2083,16 +2104,14 @@ window._idbGetAll  = idbGetAll;
           window._idbSetMany(entries).catch(() => {});
         }
       } catch {}
-      const isFromCache = snap.metadata?.fromCache ?? false;
-      if (!isFromCache) {
-        window.__fsConnected = true;
-        if (window.__onFsConnectedChange) window.__onFsConnectedChange(true);
-      }
+
+      // نعتبر متصل حتى لو البيانات من الـ cache — المهم Firestore استجاب
+      window.__fsConnected = !isFromCache;
+      if (window.__onFsConnectedChange) window.__onFsConnectedChange(!isFromCache);
       console.log(`✅ Firestore: تم تحميل ${snap.size} مجموعة${isFromCache ? ' (من الـ Cache المحلي)' : ''}`);
     } catch (e) {
       window.__fsConnected = false;
       if (window.__onFsConnectedChange) window.__onFsConnectedChange(false);
-      // لو Firestore فشل، نحمّل من IDB كـ fallback شامل
       try {
         if (window._idbGetAll) {
           const allIdb = await window._idbGetAll();
@@ -2149,12 +2168,22 @@ window._idbGetAll  = idbGetAll;
     let migrated = 0;
     for (const key of keys) {
       try {
-        const snap = await getDoc(doc(fsDb, "salonData", key));
-        if (snap.exists()) continue;
         const local = localStorage.getItem(key);
         if (!local) continue;
         const parsed = JSON.parse(local);
         if (Array.isArray(parsed) && parsed.length === 0) continue;
+        if (parsed === null || parsed === undefined) continue;
+
+        // تحقق من Firestore — لو موجود وعنده بيانات فعلية، متكتبش فوقيه
+        const snap = await getDoc(doc(fsDb, "salonData", key));
+        if (snap.exists()) {
+          const remoteVal = snap.data().value;
+          const remoteHasData = remoteVal !== null && remoteVal !== undefined &&
+            !(Array.isArray(remoteVal) && remoteVal.length === 0);
+          if (remoteHasData) continue; // Firestore عنده بيانات — سيبه
+        }
+
+        // Firestore فاضي أو مش موجود — ارفع المحلي
         await setDoc(doc(fsDb, "salonData", key), { value: parsed, migratedAt: Date.now() });
         _cache[key] = parsed;
         migrated++;
