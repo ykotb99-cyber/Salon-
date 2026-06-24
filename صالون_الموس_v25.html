@@ -1824,7 +1824,6 @@ window._idbGetAll  = idbGetAll;
   import {
     initializeFirestore,
     persistentLocalCache,
-    persistentMultipleTabManager,
     doc, setDoc, getDoc,
     collection, getDocs,
     onSnapshot,
@@ -1852,16 +1851,14 @@ window._idbGetAll  = idbGetAll;
   let _persistenceEnabled = false;
   try {
     fsDb = initializeFirestore(app, {
-      localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager()
-      }),
-      experimentalAutoDetectLongPolling: true
+      localCache: persistentLocalCache(),
+      experimentalAutoDetectLongPolling: true,
+      experimentalForceLongPolling: false,
     });
     _persistenceEnabled = true;
     console.log("✅ Firestore Offline Persistence مفعّلة (IndexedDB)");
   } catch (e) {
-    // fallback لو persistentLocalCache مش متاح (متصفح قديم)
-    console.warn("⚠️ Persistence fallback إلى إعدادات عادية:", e);
+    console.warn("⚠️ Persistence fallback:", e);
     try {
       fsDb = initializeFirestore(app, {
         experimentalAutoDetectLongPolling: true
